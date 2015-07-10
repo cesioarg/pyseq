@@ -56,7 +56,7 @@ import warnings
 from glob import glob
 from datetime import datetime
 
-__version__ = "0.4.1"
+__version__ = "0.4.3"
 
 # default serialization format string
 global_format = '%4l %h%p%t %R'
@@ -68,7 +68,7 @@ digits_re = re.compile(r'\d+')
 format_re = re.compile(r'%(?P<pad>\d+)?(?P<var>\w+)')
 
 # character to join explicit frame ranges on
-range_join = os.environ.get('PYSEQ_RANGE_SEP', ' ')
+range_join = os.environ.get('PYSEQ_RANGE_SEP', ', ')
 
 __all__ = [
     'SequenceError', 'FormatError', 'Item', 'Sequence', 'diff', 'uncompress',
@@ -690,7 +690,7 @@ class Sequence(list):
             frange.append(str(start))
         else:
             frange.append('%s-%s' % (str(start), str(end)))
-        return range_join.join(frange)
+        return "[%s]" % range_join.join(frange)
 
     def _get_frames(self):
         """finds the sequence indexes from item names
@@ -817,10 +817,10 @@ def uncompress(seq_string, fmt=global_format):
         's': '\d+',
         'e': '\d+',
         'l': '\d+',
-        'h': '\S+',
-        't': '\S+',
+        'h': '(\S+)?',
+        't': '(\S+)?',
         'r': '\d+-\d+',
-        'R': '[\d\s\-]+',
+        'R': '\[[\d\s?\-%s?]+\]' % re.escape(range_join),
         'p': '%\d+d',
         'm': '\[.*\]',
         'f': '\[.*\]'
@@ -830,6 +830,7 @@ def uncompress(seq_string, fmt=global_format):
 
     # escape any re chars in format
     fmt = re.escape(fmt)
+    
     # replace \% with % back again
     fmt = fmt.replace('\\%', '%')
 
@@ -848,6 +849,8 @@ def uncompress(seq_string, fmt=global_format):
     regex = re.compile(fmt)
     match = regex.match(name)
 
+    log.debug("match: %s" % match.groupdict() if match else "")
+
     frames = []
     missing = []
     s = None
@@ -859,14 +862,13 @@ def uncompress(seq_string, fmt=global_format):
 
     try:
         pad = match.group('p')
+
     except IndexError:
         pad = "%d"
 
     try:
         R = match.group('R')
-        log.debug("matched R")
-        # 1-10 13 15-20 38
-        # expand all the frames
+        R = R[1:-1]
         number_groups = R.split(range_join)
 
         for number_group in number_groups:
@@ -875,28 +877,30 @@ def uncompress(seq_string, fmt=global_format):
                 start = int(splits[0])
                 end = int(splits[1])
                 frames.extend(range(start, end + 1))
+
             else:
-                # just append the number
                 end = int(number_group)
                 frames.append(end)
 
     except IndexError:
         try:
             r = match.group('r')
-            log.debug('matched r: %s' % r)
             s, e = r.split('-')
             frames = range(int(s), int(e) + 1)
+
         except IndexError:
             s = match.group('s')
             e = match.group('e')
 
     try:
         frames = eval(match.group('f'))
+
     except IndexError:
         pass
 
     try:
         missing = eval(match.group('m'))
+
     except IndexError:
         pass
 
@@ -906,12 +910,19 @@ def uncompress(seq_string, fmt=global_format):
             if i in missing:
                 continue
             f = pad % i
-            name = '%s%s%s' % (match.group('h'), f, match.group('t'))
+            name = '%s%s%s' % (
+                match.groupdict().get('h', ''), f, 
+                match.groupdict().get('t', '')
+            )
             items.append(Item(os.path.join(dirname, name)))
+
     else:
         for i in frames:
             f = pad % i
-            name = '%s%s%s' % (match.group('h'), f, match.group('t'))
+            name = '%s%s%s' % (
+                match.groupdict().get('h', ''), f, 
+                match.groupdict().get('t', '')
+            )
             items.append(Item(os.path.join(dirname, name)))
 
     seqs = get_sequences(items)
@@ -927,7 +938,7 @@ def getSequences(source):
     return get_sequences(source)
 
 
-def get_sequences(source, lower=False):
+def get_sequences(source):
     """Returns a list of Sequence objects given a directory or list that contain
     sequential members.
 
@@ -984,16 +995,15 @@ def get_sequences(source, lower=False):
             items = sorted(glob(os.path.join(source, '*')))
         else:
             items = sorted(glob(source))
+
     else:
         raise TypeError('Unsupported format for source argument')
+
     log.debug('Found %s files' % len(items))
 
     # organize the items into sequences
     while items:
         item = Item(items.pop(0))
-        if lower:
-            item = item.lower()
-            
         found = False
         for seq in seqs[::-1]:
             if seq.includes(item):
@@ -1027,6 +1037,7 @@ def walk(source, level=-1, topdown=True, onerror=None, followlinks=False, hidden
     source = os.path.abspath(source)
 
     for root, dirs, files in os.walk(source, topdown, onerror, followlinks):
+
         if not hidden:
             files = [f for f in files if not f[0] == '.']
             dirs[:] = [d for d in dirs if not d[0] == '.']
@@ -1041,7 +1052,3 @@ def walk(source, level=-1, topdown=True, onerror=None, followlinks=False, hidden
         yield root, dirs, get_sequences(files)
 
     log.debug('time: %s' % (datetime.now() - start))
-
-
-if __name__ == '__main__':
-    pass
